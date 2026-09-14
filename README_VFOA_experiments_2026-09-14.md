@@ -318,7 +318,7 @@ val 共预测 218 张脸，以下二分类指标针对 186 张 GT 确定人脸�
 | 不看 | 11 | 40 |
 | 看 | 16 | 119 |
 
-另外 32 张 uncertain 中，6 张判不看、26 张判看。这是输出分布，不是 uncertain 识别准确率，不能将其中某一类的数量直接当作错误数。
+另外 32 张 uncertain 中，6 张判不看、26 张判看。在本节二分类评估中，这些样本只报告输出分布，不计入二分类错误。若另做完整三分类评估，这 32 张的输出均不等于真实 uncertain 标签，必须按第三类未识别计入错误；两种评估口径不能混用。
 
 Train 校准结果作为诊断保留，不作为独立评估：
 
@@ -353,6 +353,8 @@ Train Accuracy=0.7100。Train uncertain 280 张中，54 张判不看、226 张�
 
 ## 6. 当前能得出的结论与比较边界
 
+### 6.1 已有结果回答了不同的问题
+
 三项实验已分别跑通，阶段结果如下：
 
 | 实验 | 主要指标 | 评估对象 |
@@ -360,6 +362,73 @@ Train Accuracy=0.7100。Train uncertain 280 张中，54 张判不看、226 张�
 | YOLO26s | mAP50=0.591，mAP50–95=0.448 | 三分类检测，218 个真实人脸 |
 | ResNet18 | Macro-F1=0.693，Accuracy=0.7431 | GT 裁剪三分类 |
 | GazeTR＋阈值 | Macro-F1=0.546，Accuracy=0.6989 | GT 裁剪二分类，186 张确定人脸 |
+
+### 6.2 为什么同时保留二分类与三分类评估
+
+**当前决定是区分两个评估层面，不把二分类预先定为唯一主任务，也不放弃 uncertain 标注。**
+
+| 评估层面 | 研究问题 | GT 样本 | 对应指标 |
+|---|---|---|---|
+| 确定样本上的二分类 | 对能够人工确定的人脸，哪条流程更能分清看／不看？ | 当前 val 的 186 张确定人脸 | 两类 macro-F1、每类 P/R/F1 |
+| 完整数据上的三分类 | 面对信息不足的图片，系统能否同时判断看、不看与无法确定？ | 当前 val 全部 218 张人脸 | 三类 macro-F1、每类 P/R/F1，重点分析 uncertain |
+
+二分类评估用于比较三条流程共有的看／不看能力；三分类评估对应完整的人工标注任务。最终论文主任务的定位应由研究问题决定，不能根据哪张表分数更高来选择。若核心问题包括识别无法确定的人脸，三分类可以作为主任务，二分类作为补充分析。
+
+uncertain 的含义是图像信息不足、无法可靠确定，例如眼部模糊、遮挡等，**不是预测角度接近看／不看阈值**。GazeTR 当前只输出两个角度，阈值规则只输出看／不看；不会因为角度接近 37.5° 就自动具有识别 uncertain 的能力。
+
+| 当前流程 | 是否学习／输出 uncertain |
+|---|---|
+| YOLO26s 三分类 | 已使用 uncertain 标签训练并可输出该类 |
+| ResNet18 三分类 | 已使用 uncertain 标签训练并可输出该类 |
+| GazeTR＋公式阈值 | 未配置 uncertain 输出机制 |
+
+如果把现有 GazeTR 二分类输出放到完整三分类任务中评价，它的 uncertain 类召回率为 0；按无预测类别的 precision/F1 记 0 的约定，uncertain F1 也为 0。这个基线可以如实报告，但总分同时反映“没有第三类输出能力”和看／不看分类错误，不能完全归因于 gaze 方向预测差。
+
+完整三分类指标必须在全部样本上重算：真实 uncertain 被预测成看或不看时，会增加相应预测类别的 FP。因此，不能只在已有二分类 F1 后面补一个 0 就得到正确的三分类 macro-F1。
+
+当前不新增 GazeTR 不确定性模块。若未来要让其具备第三类输出，需要单独定义、训练／校准并验证不确定性判断机制；这会构成新增实验设置。
+
+### 6.3 统一指标与完整流程的统计规则
+
+**Macro-F1 是建议的核心比较指标，但必须明确平均的是两个类别还是三个类别，并统一输入与匹配规则。**
+
+```math
+F1_c = 2 TP_c / (2 TP_c + FP_c + FN_c)
+Macro-F1 = (1 / C) * sum(F1_c)
+```
+
+二分类 C=2，三分类 C=3。Macro-F1 给予各类别相同权重，避免只看 Accuracy 时掩盖“不看”或 uncertain 的低召回。
+
+| 指标 | 在本研究中的用途 |
+|---|---|
+| 两类／三类 Macro-F1 | 分别比较共同二分类能力和完整三分类任务 |
+| 每类 Precision、Recall、F1 | 区分误报、漏判及 uncertain 识别问题 |
+| 人脸检测 Recall | 分析分类之前漏掉多少人脸 |
+| mAP50、mAP50–95 | 检测与定位性能补充 |
+| Accuracy | 固定人脸样本上的分类补充，不能单独排名 |
+| ROC-AUC | 分析 GazeTR 分数的排序区分能力 |
+| 总耗时 ms/原图 | 在统一硬件与计时条件下比较检测、裁剪、分类的总体开销 |
+
+最终完整流程应让三种方法从相同原图开始，ResNet 与 GazeTR 共用同一个人脸检测器。建议采用 IoU≥0.5 的统一一对一匹配，再统计类别预测；匹配顺序与重复框处理需在评估代码中固定。
+
+| 情况 | 统计处理 |
+|---|---|
+| 框匹配且类别正确 | 对应类别 TP |
+| 框匹配但看／不看分错 | 真实类别 FN，同时为预测类别 FP |
+| 真实人脸未检测到 | 真实类别 FN |
+| 多余／重复框输出目标类别 | 预测类别 FP |
+| 确定人脸预测为 uncertain：二分类评估 | 保留该人脸，记真实类别 FN，并报告拒判数 |
+| 确定人脸预测为 uncertain：三分类评估 | 真实类别 FN，同时为 uncertain 类 FP |
+| 真实 uncertain：二分类评估 | 按预先确定的 GT 忽略匹配规则处理，并单独分析 |
+| 真实 uncertain：三分类评估 | 正常作为第三类参与 TP/FP/FN 统计 |
+
+二分类中忽略的是 **GT uncertain**，不是所有被模型预测为 uncertain 的样本。检测评估的忽略匹配规则必须对三条流程一致；不能简单删除 uncertain 标签后，把相应真实人脸上的预测当作背景误检。
+
+漏检、多余框必须进入完整流程的统计，不能仅在成功匹配的人脸上计算分类成绩后称为系统性能。检测置信度与 gaze 阈值均在开发数据上确定，最终测试时固定，不要求三种方法使用数值相同的阈值。
+
+本节是拟采用的统一评估协议，尚未生成三条完整流程的比较结果。当前第 3–5 节的指标继续保留原有定义；以后报告性能差异时，可按原始图片分组估计置信区间。
+
+### 6.4 下一轮比较需要统一的条件
 
 接下来的比较需要解决两点：
 
@@ -392,7 +461,11 @@ ResNet 使用类别标签更新网络权重；GazeTR 固定网络，仅学习阈
 
 ### 第三项：重新统计可比较的分类结果
 
-读取 ResNet `val_predictions.csv`，按原图／人脸标识匹配相同确定样本，保留预测 uncertain 的拒判情况。先完成 GT 裁剪上的配对比较，再推进检测框上的完整流程评估。
+读取 ResNet `val_predictions.csv`，按原图／人脸标识匹配相同的 186 张确定样本，保留预测 uncertain 的拒判情况，完成与 GazeTR 的二分类对照。同时保留 ResNet 在全部 218 张脸上的三分类结果，明确两张表回答不同问题。
+
+若补充现有 GazeTR 的完整三分类基线，应从全部逐脸预测重新计算并明确“无 uncertain 输出机制”，不把二分类分数直接转换成三分类分数。此评估不意味着给 GazeTR 新增第三类模型。
+
+先完成 GT 裁剪上的分析，再推进检测框上的完整流程评估；不把加入不确定性判断模块列为明天的前置任务。
 
 ### 明天准备的材料
 
@@ -425,6 +498,12 @@ ls /home/lunet/cowz2/Documents/VisualFocus_of_AttentionDetection/Dataset/face_cr
 > With a training-calibrated threshold of 37.5 degrees, the gaze-based baseline achieved a macro-F1 of 0.546 and an accuracy of 69.89% on 186 validation faces with certain labels. Recall was 0.881 for looking at the camera and 0.216 for not looking at the camera. The main error was the misclassification of non-camera-directed faces as camera-directed. These findings describe the current raw-crop transfer and thresholding configuration; they do not establish the accuracy of physical gaze angles in the original images.
 
 论文中分别报告检测、三分类和二分类结果，注明样本数、训练监督与输入框来源。当前没有 WIDER 子集上的连续 gaze 真值，因此不报告其平均 gaze angular error，也不将这些验证分数表述为最终独立测试结果。
+
+### 评估设计说明草稿（计划，尚未全部完成）
+
+> We distinguish binary discrimination on faces with certain ground-truth labels from three-class recognition on the full annotated set. The former assesses the ability shared by all three pipelines to distinguish camera-directed from non-camera-directed attention; the latter additionally assesses recognition of indeterminate cases. Predictions of uncertain on certain ground-truth faces are retained as abstentions and counted as failures in binary evaluation. The current gaze-based baseline has no uncertain output mechanism, which must be accounted for when interpreting its performance in a three-class evaluation.
+
+未来完整系统的 Macro-F1 应包含检测错误，并注明类别数及框匹配条件。三分类能力受监督标签与输出机制影响，不仅取决于网络对确定类别的区分能力。
 
 ### 结果依据与归档
 
