@@ -1,0 +1,17 @@
+# Paths are absolute on your Linux server. Relative paths resolve beside this config.
+repo: /home/lunet/cowz2/Documents/GazeEstimation/GazeTR
+weights: /home/lunet/cowz2/Documents/GazeEstimation/GazeTR/GazeTR-H-ETH.pt
+data: /home/lunet/cowz2/Documents/VisualFocus_of_AttentionDetection/Dataset/face_crop_3c
+output: ./runs/gazetr_rawcrop_binary_seed42
+device: cuda:0
+batch_size: 32
+seed: 42
+calibration_split: train
+evaluation_split: val
+# ETH convention used in the previous prediction script.
+# The reader/export scripts alone do not establish these units or order.
+angle_order: pitch_yaw
+angle_unit: radians
+# Predict looking if acos(cos(pitch)*cos(yaw)) <= threshold.
+# Fixed grid in degrees; also includes -1 (predict none looking).
+threshold_step_deg: 0.5
