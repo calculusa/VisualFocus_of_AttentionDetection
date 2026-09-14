@@ -1,0 +1,23 @@
+# 裁剪后的人脸数据，包含 train/ 和 val/
+data: "/home/lunet/cowz2/Documents/VisualFocus_of_AttentionDetection/Dataset/face_crop_3c"
+
+# 实验输出目录，每次新实验使用新目录
+output: "./runs/resnet18_3c_seed42"
+
+# 训练参数
+epochs: 40
+batch: 32
+lr: 0.0001
+weight_decay: 0.0001
+
+# 连续多少轮验证集 Macro-F1 没有提升就停止
+patience: 10
+
+# 运行设置
+device: "cuda:0"
+workers: 4
+seed: 42
+
+# 默认进行训练；填写模型路径后改为仅评估
+eval_checkpoint: null
+split: "val"
