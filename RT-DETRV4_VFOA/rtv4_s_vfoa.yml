@@ -1,9 +1,9 @@
 # Copy this file into RT-DETRv4/configs/rtv4/.
 # Adapted 50-epoch fine-tuning schedule, not the original 132-epoch recipe.
-__include__: ['./rtv4_hgnetv2_s_coco.yml']
+__include__: ['./rtv4_hgnetv2_x_coco.yml']
 num_classes: 3
 remap_mscoco_category: False
-output_dir: ./outputs/rtv4_s_vfoa_50ep_seed0
+output_dir: ./outputs/rtv4_x_vfoa_50ep_seed0
 eval_spatial_size: [640, 640]
 epoches: 50
 flat_epoch: 25
