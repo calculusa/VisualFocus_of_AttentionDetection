@@ -1,0 +1,33 @@
+# Copy this file into RT-DETRv4/configs/rtv4/.
+# Adapted 50-epoch fine-tuning schedule, not the original 132-epoch recipe.
+__include__: ['./rtv4_hgnetv2_s_coco.yml']
+num_classes: 3
+remap_mscoco_category: False
+output_dir: ./outputs/rtv4_s_vfoa_50ep_seed0
+eval_spatial_size: [640, 640]
+epoches: 50
+flat_epoch: 25
+no_aug_epoch: 10
+warmup_iter: 200
+teacher_model:
+  dinov3_repo_path: ./dinov3
+  dinov3_weights_path: ./pretrain/REPLACE_WITH_DINOV3_VITB16_LVD1689M.pth
+train_dataloader:
+  total_batch_size: 16
+  num_workers: 4
+  dataset:
+    img_folder: /REPLACE_WITH_COCO_ROOT/images/train
+    ann_file: /REPLACE_WITH_COCO_ROOT/annotations/instances_train.json
+    transforms:
+      policy:
+        epoch: [4, 25, 40]
+  collate_fn:
+    base_size: 640
+    mixup_epochs: [4, 25]
+    stop_epoch: 40
+val_dataloader:
+  total_batch_size: 16
+  num_workers: 4
+  dataset:
+    img_folder: /REPLACE_WITH_COCO_ROOT/images/val
+    ann_file: /REPLACE_WITH_COCO_ROOT/annotations/instances_val.json
