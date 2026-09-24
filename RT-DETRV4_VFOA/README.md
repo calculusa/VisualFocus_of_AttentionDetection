@@ -1,76 +1,75 @@
-# RT-DETRv4-S VFOA 三分类
+# RT-DETRv4 VFOA evaluation
 
-代码依据 https://github.com/RT-DETRs/RT-DETRv4 ，检查版本：
-55fefaaed7efe2a5f72d0a18fd4e05965e35c292。
+将 eval_rtv4_vfoa.py 放到 RT-DETRv4 根目录，在该目录执行。无需重新训练，不实例化 DINOv3 教师模型。
+使用自己训练的可信 checkpoint（torch.load 使用 weights_only=False）。默认优先读取 EMA，与训练期间验证一致。
 
-1. 新建环境，避免改动现有 YOLO/GazeTR 环境：
+## 1. 环境
 
 ```bash
-git clone https://github.com/RT-DETRs/RT-DETRv4.git
-cd RT-DETRv4
-conda create -n rtv4 python=3.11.9 -y
 conda activate rtv4
-python -m pip install -r requirements.txt
-git clone https://github.com/facebookresearch/dinov3.git dinov3
-mkdir -p pretrain
+python -m pip install matplotlib
 ```
 
-2. 从官方 README 的模型表下载 **RT-DETRv4-S COCO checkpoint**，保存为
-`pretrain/rtv4_s_coco.pth`。从 README 指向的 DINOv3 官方下载入口获取
-**ViT-B/16 LVD-1689M** 权重，遵循官方访问流程。不要换成 ViT-S/L 或其他预训练版本。
+沿用已跑通训练的环境及 requirements。COCO 评估优先使用已安装的 faster-coco-eval，缺少时才使用 pycocotools。
 
-3. 将 `rtv4_s_vfoa.yml` 放到 `configs/rtv4/`；将 `check_vfoa_coco.py`
-放到仓库根目录。修改 YAML 内四个数据路径和 DINOv3 权重路径。
-数据必须是原图加 COCO 检测框，使用与 YOLO 相同的 train/val 划分，不是 face crops。
-category_id 必须为 0=not_looking_at_camera，1=looking_at_camera，2=uncertain。
-若当前是 1/2/3，先按类别名称同时映射 categories 和 annotations；检查器不会自动改文件。
-
-4. 检查数据和环境：
+## 2. 快速验证（固定 confidence=0.25）
 
 ```bash
-python check_vfoa_coco.py configs/rtv4/rtv4_s_vfoa.yml
-python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+CUDA_VISIBLE_DEVICES=0 python eval_rtv4_vfoa.py \
+  -c configs/rtv4/rtv4_x_vfoa.yml \
+  -w outputs/rtv4_x_vfoa_50ep_seed0_20260923/best_stg1.pth \
+  --split val --conf 0.25 --out evaluations/rtv4_x_val_conf025
 ```
 
-5. 正式训练（四卡，总 batch=16，每卡4）：
+0.25 只是明确的初始工作阈值，不声称最佳。先核对 coco_metrics.json 中 mAP50–95≈0.4753、mAP50≈0.6480；如明显不同，先检查权重、EMA、配置和数据路径。浮点误差可能产生小幅差异。
+
+## 3. 正式比较：在 train 上选阈值，再固定到 val/test
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 train.py \
-  -c configs/rtv4/rtv4_s_vfoa.yml \
-  -t pretrain/rtv4_s_coco.pth --use-amp --seed=0
+CUDA_VISIBLE_DEVICES=0 python eval_rtv4_vfoa.py \
+  -c configs/rtv4/rtv4_x_vfoa.yml \
+  -w outputs/rtv4_x_vfoa_50ep_seed0_20260923/best_stg1.pth \
+  --split train \
+  --images /home/lunet/cowz2/Documents/VisualFocus_of_AttentionDetection/Dataset/widerface_vfoa_rtDetr/images/train \
+  --ann /home/lunet/cowz2/Documents/VisualFocus_of_AttentionDetection/Dataset/widerface_vfoa_rtDetr/annotations/instances_train.json \
+  --select-threshold --out evaluations/rtv4_x_train_threshold
+
+CUDA_VISIBLE_DEVICES=0 python eval_rtv4_vfoa.py \
+  -c configs/rtv4/rtv4_x_vfoa.yml \
+  -w outputs/rtv4_x_vfoa_50ep_seed0_20260923/best_stg1.pth \
+  --split val \
+  --threshold-file evaluations/rtv4_x_train_threshold/threshold.json \
+  --out evaluations/rtv4_x_val_frozen
 ```
 
-后台运行（二选一，不要同时启动）：
+train 推理也使用无随机增强的 val transforms。搜索 0–1、步长0.005，以三类 macro-F1 最大选阈值；并列取最低阈值。训练集选择会受拟合程度影响，应在论文说明；不可再根据 val/test 曲线调整冻结阈值。checkpoint 已在 val 上选择，最终泛化结果要在独立 test 上报告。
 
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 nohup torchrun --standalone --nproc_per_node=4 train.py \
-  -c configs/rtv4/rtv4_s_vfoa.yml \
-  -t pretrain/rtv4_s_coco.pth --use-amp --seed=0 \
-  > rtv4_s_vfoa.log 2>&1 < /dev/null &
-```
+测试集：以上第二条命令改为 --split test，并增加实际 --images 和 --ann 路径，输出至新目录，保持 threshold-file 不变。
 
-`-t` 是迁移微调，`-r` 是恢复同一实验；不要用 `-r` 加载80类COCO权重开始3类实验。
-初始化日志应显示大量权重正常加载；类别相关 head 不匹配是预期行为，但 backbone/encoder
-大量不匹配需要停下来检查 checkpoint 型号。
+## 4. 输出
 
-配置保留官方 DINOv3 蒸馏及增强，输入基准640，50轮；warmup=200 iterations，
-flat_epoch=25，增强切换=[4,25,40]，最后10轮关闭相应强增强。
-这些是本任务适配参数，不是作者的原始132轮设置，也不能称与YOLO的全部训练设置相同。
-学习率和损失沿用官方S配置。蒸馏教师是额外预训练资源，论文应明确记录。
-相同50轮是预算控制，不保证不同模型都达到最优。
+- coco_metrics.json：COCO 总体 AP/AR、每类 AP50 和 AP50–95。
+- per_class_metrics.csv：每类 support、TP、FP、FN、P、R、F1、AP。
+- summary.json：macro-P/R/F1、阈值、匹配规则、checkpoint/标注 SHA256、权重来源。
+- predictions_coco.json：官方后处理的全部预测（原图坐标 xywh），用于后续统一评估。
+- confusion_matrix.csv/png：行=真实，列=预测；background 行=未匹配预测，background 列=漏检。
+- confusion_matrix_normalized.png：按真实类别行归一化。
+- BoxPR_curve.png：COCO IoU0.50 的101点插值 PR，maxDets100。
+- BoxP_curve.png、BoxR_curve.png、BoxF1_curve.png：本脚本空间匹配协议下的阈值曲线。
+- threshold_curve.csv：阈值与 macro 指标；仅 --select-threshold 输出 threshold.json。
 
-输出在 `outputs/rtv4_s_vfoa_50ep_seed0/`，日志、best_stg1.pth、best_stg2.pth
-均保留；依据验证集AP选择阶段checkpoint，不要默认stg2更好。
-官方评估AP不等于统一目标级Macro-F1，后续仍需统一导出与评估。
-测试集保持独立，不用于训练/选择参数。
+## 5. 评估定义与公平性
 
-成功运行后记录环境和两个仓库版本：
+AP 沿用官方 top-300 后处理，不额外 NMS、不先按 --conf 过滤；交给 COCO 评估器按 maxDets=100 计算。AP 汇总中的 -1 表示该分组无有效 GT，不能当作性能值。
 
-```bash
-python -m pip freeze > outputs/rtv4_s_vfoa_50ep_seed0/environment.txt
-git rev-parse HEAD > outputs/rtv4_s_vfoa_50ep_seed0/rtdetr_commit.txt
-git -C dinov3 rev-parse HEAD > outputs/rtv4_s_vfoa_50ep_seed0/dinov3_commit.txt
-```
+P/R/F1 使用固定 confidence 与 IoU>=0.50：每图预测按置信度降序排列，每个预测匹配 IoU 最大且尚未匹配的 GT，空间匹配不要求类别相同。错分类计入真实类别 FN 和预测类别 FP；重复框/未匹配预测计 FP；未匹配 GT 计 FN。Macro-F1 是三个类别 F1 的算术平均，不包含 background。没有预测的类别 P 记0。当前只支持0/1/2三类、无 crowd/ignore 的 VFOA 数据。
 
-本包已验证YAML继承合并及检查器语法/小型样例；未在GPU或你的实际数据上训练。
-若出现依赖或CUDA错误，保留完整报错，先不要改动现有yolo环境。
+COCO AP 自己使用类别相关匹配；因此 COCO PR 与本脚本的空间混淆矩阵是两种明确分开的统计，不要相互推导。
+
+本脚本不是 Ultralytics 指标的逐行复刻；YOLO 日志的 P/R 常对应另一套阈值和匹配方式。正式横向比较时，对各方法的预测使用同一评估器、IoU、阈值选择规则及相同图片/GT。裁剪分类报告仍不能直接与全图检测 F1 对比：需把 crop 预测映射回候选框，计入漏检和误检。RT-DETR 独立检测结果属于端到端比较，不属于共同 YOLO 候选框分类实验。
+
+运行使用 FP32、默认 batch8；显存不足加 --batch-size 2。单GPU无需 torchrun。保留现有训练配置，不添加 ImageNet normalization，不使用 letterbox；脚本直接读取配置中的 val dataset/transforms。
+
+## 验证范围
+
+已通过 Python 语法检查和合成案例（完美预测、错分类、重复框、漏检、空预测）验证匹配统计。未在用户 GPU/真实 checkpoint 上运行；请先用第2步核对已知 AP。脚本会自动移动旧编码器缓存的位置编码，避免先前 CPU/GPU 不一致问题。
